@@ -156,6 +156,7 @@ type defaultModelBuildTask struct {
 	defaultHealthCheckMatcherGRPCCode         string
 
 	loadBalancer *elbv2model.LoadBalancer
+	listener	 *elbv2model.Listener
 	managedSG    *ec2model.SecurityGroup
 	tgByResID    map[string]*elbv2model.TargetGroup
 }

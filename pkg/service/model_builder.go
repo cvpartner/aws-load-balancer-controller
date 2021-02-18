@@ -15,7 +15,7 @@ import (
 // ModelBuilder builds the model stack for the service resource.
 type ModelBuilder interface {
 	// Build model stack for service
-	Build(ctx context.Context, service *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, error)
+	Build(ctx context.Context, service *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, *elbv2model.Listener, error)
 }
 
 // NewDefaultModelBuilder construct a new defaultModelBuilder
@@ -37,7 +37,7 @@ type defaultModelBuilder struct {
 	defaultTags      map[string]string
 }
 
-func (b *defaultModelBuilder) Build(ctx context.Context, service *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, error) {
+func (b *defaultModelBuilder) Build(ctx context.Context, service *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, *elbv2model.Listener, error) {
 	stack := core.NewDefaultStack(core.StackID(k8s.NamespacedName(service)))
 	task := &defaultModelBuildTask{
 		clusterName:      b.clusterName,
@@ -64,9 +64,9 @@ func (b *defaultModelBuilder) Build(ctx context.Context, service *corev1.Service
 		defaultHealthCheckUnhealthyThreshold: 3,
 	}
 	if err := task.run(ctx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return task.stack, task.loadBalancer, nil
+	return task.stack, task.loadBalancer, task.listener, nil
 }
 
 type defaultModelBuildTask struct {
@@ -78,6 +78,7 @@ type defaultModelBuildTask struct {
 
 	stack        core.Stack
 	loadBalancer *elbv2model.LoadBalancer
+	listener	*elbv2model.Listener
 	tgByResID    map[string]*elbv2model.TargetGroup
 	ec2Subnets   []*ec2.Subnet
 

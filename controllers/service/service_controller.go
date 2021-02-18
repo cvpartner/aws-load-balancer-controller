@@ -89,26 +89,26 @@ func (r *serviceReconciler) reconcile(req ctrl.Request) error {
 	return r.reconcileLoadBalancerResources(ctx, svc)
 }
 
-func (r *serviceReconciler) buildAndDeployModel(ctx context.Context, svc *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, error) {
-	stack, lb, err := r.modelBuilder.Build(ctx, svc)
+func (r *serviceReconciler) buildAndDeployModel(ctx context.Context, svc *corev1.Service) (core.Stack, *elbv2model.LoadBalancer, *elbv2model.Listener, error) {
+	stack, lb, listener, err := r.modelBuilder.Build(ctx, svc)
 	if err != nil {
 		r.eventRecorder.Event(svc, corev1.EventTypeWarning, k8s.ServiceEventReasonFailedBuildModel, fmt.Sprintf("Failed build model due to %v", err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	stackJSON, err := r.stackMarshaller.Marshal(stack)
 	if err != nil {
 		r.eventRecorder.Event(svc, corev1.EventTypeWarning, k8s.ServiceEventReasonFailedBuildModel, fmt.Sprintf("Failed build model due to %v", err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	r.logger.Info("successfully built model", "model", stackJSON)
 
 	if err = r.stackDeployer.Deploy(ctx, stack); err != nil {
 		r.eventRecorder.Event(svc, corev1.EventTypeWarning, k8s.ServiceEventReasonFailedDeployModel, fmt.Sprintf("Failed deploy model due to %v", err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	r.logger.Info("successfully deployed model", "service", k8s.NamespacedName(svc))
 
-	return stack, lb, nil
+	return stack, lb, listener, nil
 }
 
 func (r *serviceReconciler) reconcileLoadBalancerResources(ctx context.Context, svc *corev1.Service) error {
@@ -116,7 +116,7 @@ func (r *serviceReconciler) reconcileLoadBalancerResources(ctx context.Context, 
 		r.eventRecorder.Event(svc, corev1.EventTypeWarning, k8s.ServiceEventReasonFailedAddFinalizer, fmt.Sprintf("Failed add finalizer due to %v", err))
 		return err
 	}
-	_, lb, err := r.buildAndDeployModel(ctx, svc)
+	_, lb, lbListener, err := r.buildAndDeployModel(ctx, svc)
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,9 @@ func (r *serviceReconciler) reconcileLoadBalancerResources(ctx context.Context, 
 		return err
 	}
 
-	if err = r.updateServiceStatus(ctx, lbDNS, svc); err != nil {
+	listenerArnStringToken, err := lbListener.ListenerARN().Resolve(ctx)
+
+	if err = r.updateServiceStatus(ctx, lbDNS, listenerArnStringToken, svc); err != nil {
 		r.eventRecorder.Event(svc, corev1.EventTypeWarning, k8s.ServiceEventReasonFailedUpdateStatus, fmt.Sprintf("Failed update status due to %v", err))
 		return err
 	}
@@ -135,7 +137,7 @@ func (r *serviceReconciler) reconcileLoadBalancerResources(ctx context.Context, 
 
 func (r *serviceReconciler) cleanupLoadBalancerResources(ctx context.Context, svc *corev1.Service) error {
 	if k8s.HasFinalizer(svc, serviceFinalizer) {
-		_, _, err := r.buildAndDeployModel(ctx, svc)
+		_, _, _, err := r.buildAndDeployModel(ctx, svc)
 		if err != nil {
 			return err
 		}
@@ -147,7 +149,7 @@ func (r *serviceReconciler) cleanupLoadBalancerResources(ctx context.Context, sv
 	return nil
 }
 
-func (r *serviceReconciler) updateServiceStatus(ctx context.Context, lbDNS string, svc *corev1.Service) error {
+func (r *serviceReconciler) updateServiceStatus(ctx context.Context, lbDNS string, lbListener string, svc *corev1.Service) error {
 	if len(svc.Status.LoadBalancer.Ingress) != 1 ||
 		svc.Status.LoadBalancer.Ingress[0].IP != "" ||
 		svc.Status.LoadBalancer.Ingress[0].Hostname != lbDNS {
@@ -157,6 +159,12 @@ func (r *serviceReconciler) updateServiceStatus(ctx context.Context, lbDNS strin
 				Hostname: lbDNS,
 			},
 		}
+
+		annotationMap := map[string]string {
+			"listener_arn": lbListener,
+		}
+		svc.ObjectMeta.SetAnnotations(annotationMap)
+
 		if err := r.k8sClient.Status().Patch(ctx, svc, client.MergeFrom(svcOld)); err != nil {
 			return errors.Wrapf(err, "failed to update service status: %v", k8s.NamespacedName(svc))
 		}

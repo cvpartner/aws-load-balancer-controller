@@ -30,6 +30,7 @@ func (t *defaultModelBuildTask) buildListener(ctx context.Context, port corev1.S
 	}
 	listenerResID := fmt.Sprintf("%v", port.Port)
 	ls := elbv2model.NewListener(t.stack, listenerResID, lsSpec)
+	t.listener = ls
 	return ls, nil
 }
 
